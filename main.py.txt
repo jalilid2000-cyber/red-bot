@@ -1,0 +1,73 @@
+import os
+import telebot
+import google.generativeai as genai
+from flask import Flask, request
+import logging
+
+# --- تنظیمات ---
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+try:
+    ADMIN_ID = int(os.environ.get("ADMIN_ID"))
+except:
+    ADMIN_ID = 0
+
+# --- ربات و هوش مصنوعی ---
+bot = telebot.TeleBot(TOKEN)
+genai.configure(api_key=GOOGLE_API_KEY)
+model = genai.GenerativeModel('gemini-pro')
+
+# برای اینکه ربات روی رندر خاموش نشه، از روش Webhook استفاده میکنیم
+# (چون رندر روش Polling رو بعد از مدتی قطع میکنه)
+server = Flask(__name__)
+
+SYSTEM_INSTRUCTION = """
+شما ربات هوشمند "RED SUITE" هستید.
+لحن: محترمانه.
+"""
+
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    user_id = message.from_user.id
+    text = message.text
+
+    # 1. ادمین
+    if user_id == ADMIN_ID:
+        if message.reply_to_message:
+            try:
+                targ = int(message.reply_to_message.text.split('\n')[0].replace("🆔:", "").strip())
+                bot.send_message(targ, f"👤 پشتیبانی: {text}")
+                bot.reply_to(message, "✅")
+            except: pass
+        return
+
+    # 2. مشتری
+    try:
+        bot.send_chat_action(user_id, 'typing')
+        resp = model.generate_content(f"{SYSTEM_INSTRUCTION}\n\n{text}")
+        bot.reply_to(message, resp.text)
+    except:
+        bot.reply_to(message, "ثبت شد.")
+    
+    # 3. لاگ برای ادمین
+    if ADMIN_ID:
+        bot.send_message(ADMIN_ID, f"🆔: {user_id}\n👤 {message.from_user.first_name}\n📩: {text}")
+
+# --- تنظیمات سرور ---
+@server.route('/' + TOKEN, methods=['POST'])
+def getMessage():
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return "!", 200
+
+@server.route("/")
+def webhook():
+    bot.remove_webhook()
+    # آدرس سایت رندر رو خودکار میگیره ولی اولش که نداریم، دستی ست میکنیم
+    # این تابع رو بعدا صدا میزنیم
+    return "Bot Running", 200
+
+if __name__ == "__main__":
+    # روی رندر این قسمت اجرا نمیشه، بلکه Gunicorn اجراش میکنه
+    server.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
